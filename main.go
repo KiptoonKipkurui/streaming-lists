@@ -3,13 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sync"
 
-	"github.com/myntra/pipeline"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,97 +22,61 @@ import (
 
 func main() {
 
-	cmd := exec.Command("ps", "aux")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		print(err.Error())
-	}
-	r, _ := regexp.Compile("WatchList=true")
-
-	if r.MatchString(out.String()) {
-		print("Matches")
-	}
-	print(out.String())
-	// AUTHENTICATE
+	// access kubernetes config
 	var home = homedir.HomeDir()
 	var kubeconfig = filepath.Join(home, ".kube", "config")
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
 
+	// ensure kubernetes is configured
+	if err != nil {
 		panic(err.Error())
 	}
 
 	// Configure dynamic kubeclient
 	dyclient, err := dynamic.NewForConfig(config)
-	// clusterPipeline := pipeline.New("pods", 1000)
-	// podStage := &pipeline.Stage{
-	// 	Name:       "process pods",
-	// 	Concurrent: false,
-	// 	Steps:      []pipeline.Step{},
-	// }
-	// // Create a stop channel to signal the goroutine to stop
-	// stopChan := make(chan struct{})
-	// podStage.AddStep(newStartWatcherStage(*dyclient, "pods.v1.", stopChan))
-	// clusterPipeline.AddStage(podStage)
-	// _ = clusterPipeline.Run()
-	// if err != nil {
-	// }
 
-	// we want to use the core API (namespaces lives here)
-	// config.APIPath = "/api"
-	// config.GroupVersion = &coreV1.SchemeGroupVersion
-	// config.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
-	// clientset, err := kubernetes.NewForConfig(config)
+	// ensure no error in obtaining the kubernetes client
 	if err != nil {
 		panic(err.Error())
 	}
-	// rc := clientset.RESTClient()
-	// // create a RESTClient
 
-	// rc, err := rest.RESTClientFor(config)
-	// if err != nil {
-	// 	panic(err.Error())
-	// }
+	// configure options
 	b := true
 	opts := metav1.ListOptions{
 		Watch:                true,
 		SendInitialEvents:    &b,
 		ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
 	}
+
 	// attempts to begin watching the namespaces
 	// returns a `watch.Interface`, or an error
 
+	// create the group version response
 	gvr, _ := schema.ParseResourceArg("pods.v1.")
-	_, err = dyclient.Resource(*gvr).Watch(context.TODO(), opts)
 
-	if err != nil {
+	// check if WatchList feature is enable
+	watchList := checkWatchListFeatureBruteForce(dyclient)
 
-		print(err.Error())
-		panic(err)
+	if !watchList {
+		if err != nil {
+			panic(errors.New("WatchList feature not enabled"))
+		}
 	}
+
+	// create the watch command
 	watcher, err := dyclient.Resource(*gvr).Watch(context.TODO(), opts)
 
 	// Create a stop channel to signal the goroutine to stop
 	stopChannel := make(chan struct{})
 
+	// create watch group for synchronizing go routines
 	var wg sync.WaitGroup
 
 	// Launch the goroutine and pass the channel as an argument
 	wg.Add(1)
 	go backgroundProcessor(watcher.ResultChan(), stopChannel, &wg)
 
-	// Define the delay duration (e.g., 3 seconds)
-	// delay := 15 * time.Second
-
-	// time.Sleep(delay)
-
-	// newCar := struct{}{}
-	// stopChannel <- newCar
-	// close(stopChannel)
 	wg.Wait()
-
 }
 func backgroundProcessor(result <-chan watch.Event, stopCh chan struct{}, wg *sync.WaitGroup) {
 
@@ -139,9 +103,9 @@ func backgroundProcessor(result <-chan watch.Event, stopCh chan struct{}, wg *sy
 				fmt.Println("Received UPDATE event for: ", obj.GetName(), "/", obj.GetNamespace(), " of kind: ", obj.GroupVersionKind().Kind)
 
 			}
-			_, ok := <-stopCh
+
 			// check if channel is closed
-			if !ok {
+			if len(stopCh) > 0 {
 				println("Goroutines killed!")
 				wg.Done()
 				return
@@ -150,117 +114,38 @@ func backgroundProcessor(result <-chan watch.Event, stopCh chan struct{}, wg *sy
 	}
 }
 
-type registerWatchers struct {
-	pipeline.StepContext
-	dynamicKube dynamic.DynamicClient
-	resource    string
-}
-
-func NewWatcherRegistrationStep(dynamicKube dynamic.DynamicClient, resource string) *registerWatchers {
-	return &registerWatchers{
-		dynamicKube: dynamicKube,
-		resource:    resource,
-	}
-}
-
-func (w registerWatchers) Exec(request *pipeline.Request) *pipeline.Result {
-
-	b := true
-	opts := metav1.ListOptions{
-		Watch:                true,
-		SendInitialEvents:    &b,
-		ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
-	}
-	// attempts to begin watching the namespaces
-	// returns a `watch.Interface`, or an error
-
-	gvr, _ := schema.ParseResourceArg(w.resource)
-	watcher, err := w.dynamicKube.Resource(*gvr).Watch(context.TODO(), opts)
-	return &pipeline.Result{
-		Error: err,
-		Data:  watcher,
-	}
-}
-
-func (w registerWatchers) Cancel() error {
-	return nil
-}
-
-type startWatchers struct {
-	pipeline.StepContext
-	stopChan    chan struct{}
-	dynamicKube dynamic.DynamicClient
-	resource    string
-}
-
-func newStartWatcherStage(dynamicKube dynamic.DynamicClient, resource string, stopChan chan struct{}) *startWatchers {
-	return &startWatchers{
-		stopChan:    stopChan,
-		dynamicKube: dynamicKube,
-		resource:    resource,
-	}
-}
-func (w startWatchers) Exec(request *pipeline.Request) *pipeline.Result {
-
-	b := true
-	opts := metav1.ListOptions{
-		Watch:                true,
-		SendInitialEvents:    &b,
-		ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
-	}
-	// attempts to begin watching the namespaces
-	// returns a `watch.Interface`, or an error
-
-	gvr, _ := schema.ParseResourceArg(w.resource)
-	watcher, err := w.dynamicKube.Resource(*gvr).Watch(context.TODO(), opts)
+// checkWatchListFeatureOs checks whether the WatchList feature gate is enabled
+// by doing a ps aux command and matching the output with 'WatchList=true' string that would signify
+// the feature being set
+func checkWatchListFeatureOs() bool {
+	cmd := exec.Command("ps", "aux")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
 	if err != nil {
-		return &pipeline.Result{
-			Error: err,
-			Data:  nil,
-		}
+		print(err.Error())
+	}
+	r, _ := regexp.Compile("WatchList=true")
+
+	if r.MatchString(out.String()) {
+		return true
 	}
 
-	result := watcher.ResultChan()
-	for {
-		select {
-
-		default:
-
-			for event := range result {
-				// retrieve the Namespace
-				// item := event.Object.(*unstructured.Unstructured)
-				obj := event.Object.(*unstructured.Unstructured)
-
-				switch event.Type {
-
-				// when an event is deleted...
-				case watch.Deleted:
-
-					fmt.Println("Received DELETE event for: ", obj.GetName(), "/", obj.GetNamespace(), " of kind: ", obj.GroupVersionKind().Kind)
-
-				// when an event is added...
-				case watch.Added:
-					fmt.Println("Received ADD event for: ", obj.GetName(), "/", obj.GetNamespace(), " of kind: ", obj.GroupVersionKind().Kind)
-
-					// when an event is added...
-				case watch.Modified:
-					fmt.Println("Received UPDATE event for: ", obj.GetName(), "/", obj.GetNamespace(), " of kind: ", obj.GroupVersionKind().Kind)
-
-				}
-			}
-		}
-
-		if len(w.stopChan) > 0 {
-			break
-		}
-
-	}
-	return &pipeline.Result{
-		Error: nil,
-		Data:  nil,
-	}
+	return false
 }
 
-func (w startWatchers) Cancel() error {
-	return nil
+// checkWatchListFeatureBruteForce checks if the WatchList feature is present by doing a test
+// streaming list watch command on a simple pod and watching the result, a positive result
+// means the feature is enabled
+func checkWatchListFeatureBruteForce(client dynamic.Interface) bool {
+	b := true
+	opts := metav1.ListOptions{
+		Watch:                true,
+		SendInitialEvents:    &b,
+		ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
+	}
+	gvr, _ := schema.ParseResourceArg("pods.v1.")
+	_, err := client.Resource(*gvr).Watch(context.TODO(), opts)
+
+	return err == nil
 }
