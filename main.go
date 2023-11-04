@@ -40,6 +40,12 @@ func main() {
 		panic(err.Error())
 	}
 
+	// attempts to begin watching the namespaces
+	// returns a `watch.Interface`, or an error
+
+	// create the group version response
+	gvr, _ := schema.ParseResourceArg("pods.v1.")
+
 	// configure options
 	b := true
 	opts := metav1.ListOptions{
@@ -47,13 +53,6 @@ func main() {
 		SendInitialEvents:    &b,
 		ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
 	}
-
-	// attempts to begin watching the namespaces
-	// returns a `watch.Interface`, or an error
-
-	// create the group version response
-	gvr, _ := schema.ParseResourceArg("pods.v1.")
-
 	// check if WatchList feature is enable
 	watchList := checkWatchListFeatureBruteForce(dyclient)
 
