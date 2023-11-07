@@ -8,10 +8,7 @@ require (
 )
 
 require (
-	github.com/fatih/color v1.15.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.17 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
 
@@ -25,7 +22,6 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/myntra/pipeline v0.0.0-20180618182531-2babf4864ce8
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/net v0.13.0 // indirect
 	golang.org/x/oauth2 v0.8.0 // indirect
